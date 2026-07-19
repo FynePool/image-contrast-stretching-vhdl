@@ -1,0 +1,37 @@
+name: VHDL simulation (GHDL)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  simulate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GHDL
+        uses: ghdl/setup-ghdl@v1
+        with:
+          version: latest
+          backend: mcode
+
+      - name: Analyze design and testbench
+        run: |
+          ghdl -a src/project_reti_logiche.vhd
+          ghdl -a -fsynopsys -fexplicit testbench/tb_2x2.vhd
+
+      - name: Elaborate testbench
+        run: ghdl -e -fsynopsys -fexplicit project_tb
+
+      - name: Run simulation
+        run: |
+          ghdl -r -fsynopsys -fexplicit project_tb --stop-time=10us | tee sim.log
+          if grep -q "TEST FALLITO" sim.log; then
+            echo "::error::Testbench reported a failing assertion"
+            exit 1
+          fi
+          if ! grep -q "TEST PASSATO" sim.log; then
+            echo "::error::Simulation did not reach the expected completion message"
+            exit 1
+          fi

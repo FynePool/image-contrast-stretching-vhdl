@@ -1,0 +1,171 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+-- Port definition by project specification
+entity project_reti_logiche is
+  Port (
+    i_clk       : in std_logic;
+    i_rst       : in std_logic;
+    i_start     : in std_logic;
+    i_data      : in std_logic_vector(7 downto 0);
+
+    o_address   : out std_logic_vector(15 downto 0);
+    o_done      : out std_logic;
+    o_en        : out std_logic;
+    o_we        : out std_logic;
+    o_data      : out std_logic_vector (7 downto 0)
+  );
+end project_reti_logiche;
+
+
+--Architeture init
+architecture Behavioral of project_reti_logiche is
+
+    type MEM_type is array(20000 downto 0) of std_logic_vector(7 downto 0);
+    type STATE_type is (IDLE , SEND_ADDR, READ,SETUP, ELAB , WRITE ,ENDWR);
+    signal MEM                              : MEM_type ;
+    signal STATE                            : STATE_type;
+    signal max_pixel_value                  : integer RANGE 0 to 255 :=0;
+    signal min_pixel_value                  : integer RANGE 0 to 255 :=255;
+    signal img_dim                          : integer RANGE 0 to 16384:=1000;
+    signal addr_int                         : std_logic_vector(15 downto 0):=(others=>'0');
+    --used for algorithm:
+    signal delta_value                      : std_logic_vector(7 downto 0);   -- differenza tra max pixel value e min pixel value
+    signal shift_level                             : integer :=0;
+    signal i                                : integer :=0;
+    signal count                            : integer :=0;
+    
+begin
+
+    --Set signal status based on FSM STATE_type
+    with STATE select  o_done  <=
+		'1'	when ENDWR,
+		'0' when OTHERS;
+
+    with STATE select  o_en  <=
+		'0'	when IDLE,
+		'1' when READ,
+        '1' when SEND_ADDR,
+		'0' when ELAB,
+        '0' when SETUP,
+		'1' when WRITE,
+		'0' when ENDWR;
+
+    with STATE select  o_we  <=
+		'1' when WRITE,
+		'0' when OTHERS;
+
+    --Actual implementation
+    process (i_clk,i_rst)
+       
+
+        begin
+          o_address<=addr_int;
+          if rising_edge(i_clk) then
+              if i_rst='1' then --Definition of reset
+                  STATE           <=  IDLE;
+                 
+              else
+
+                  
+                  case STATE is
+
+                    when IDLE  =>
+                        o_address       <= (others=>'0');
+                        o_data          <= (others=>'0');
+                        MEM             <= (others=>(others=>'0'));
+                        max_pixel_value <= 0;
+                        min_pixel_value <= 255;
+                        count           <= 0;
+                        i               <= 0;
+                        if i_start='1' then
+                            STATE <= SEND_ADDR;
+                        end if;
+
+                    when SEND_ADDR =>
+                        STATE <= READ;
+                        if to_integer(unsigned(addr_int)) > img_dim+1 then                                                  --Recognize end of image bytes
+                            i     <= 2;                                                                                     --reset support variable for next STATE_type
+                            STATE <= SETUP;
+                            delta_value   <= std_logic_vector(to_unsigned(max_pixel_value-min_pixel_value+1,8));
+                            
+                        end if;
+
+                    when READ =>
+                        if i=2 then
+                            img_dim <= to_integer(unsigned(MEM(0))) * to_integer(unsigned(MEM(1)));
+                        end if;
+                        if i > 1 then
+                            if to_integer(unsigned(i_data)) < min_pixel_value then                                              --Search for min_pixel_value
+                                min_pixel_value <= to_integer(unsigned(i_data));
+                            end if;
+                            if to_integer(unsigned(i_data)) > max_pixel_value then                                              --Search for max_pixel_value
+                                max_pixel_value <= to_integer(unsigned(i_data));
+                            end if;
+                        end if;
+                        MEM(i)   <= i_data;
+                        i        <= i+1;
+                        addr_int <= std_logic_vector(to_unsigned((to_integer(unsigned(addr_int))+1),addr_int'length ));
+                        STATE    <= SEND_ADDR;
+
+                    when SETUP =>
+                        for j in 0 to 7 loop
+                            if delta_value(j) = '1' then
+                                shift_level    <=  8-j; --shift level
+                            end if;
+                        end loop;
+                        MEM(i)<=std_logic_vector(to_unsigned(to_integer(unsigned(MEM(i))) - min_pixel_value,8));
+                        
+                        
+                        STATE <= ELAB;
+                        
+                        
+                    when ELAB  =>
+                       if count < shift_level  then
+                           if MEM(i)(7) = '0' then
+                               MEM(i) <= MEM(i)(6 downto 0) & '0';
+                           else
+                               MEM(i) <= (others=>'1');
+                           end if;
+                           count<=count+1;
+                       else
+                           
+                           if i >= img_dim+1  then
+                                   i <= 2;
+                                   STATE <= WRITE;
+
+                            else
+                                STATE <= SETUP;
+                                count<=0;
+                                i <= i+1;
+                            end if;
+                      
+                       end if;
+
+
+                    when WRITE =>
+
+                        o_data      <= MEM(i);
+                        if i_data= MEM(i) then
+                            addr_int    <= std_logic_vector(to_unsigned((to_integer(unsigned(addr_int))+1),addr_int'length ));
+                            i           <= i+1;
+                            if i=img_dim+2 then
+                                i           <= 0;
+                                addr_int    <= (others=>'0');
+                                STATE       <= ENDWR;
+                                o_data      <= (others=>'0');
+                            end if;
+                        end if;
+                     
+
+                    when ENDWR =>
+                        if i_start ='0' then
+                            STATE <= IDLE;  -- DOVE SI SETTA rst DI NUOVO A 0??
+                        end if;
+                  end case;
+              end if;
+          end if;
+        end process;
+
+end Behavioral;
